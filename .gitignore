@@ -56,5 +56,5 @@ docs/_build/
 # PyBuilder
 target/
 
-# elkauth file
-elkauth
+# elk setup file. Don't checkin by accident.
+elkrc
