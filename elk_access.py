@@ -16,6 +16,8 @@ import sys
 import time
 import traceback
 
+# Whether or not the alarm is armed and if so
+# which of the various armed states (away, night, vacation, etc)
 DISARM = 0
 ARM_AWAY = 1
 ARM_STAY = 2
@@ -26,33 +28,86 @@ ARM_VACATION = 6
 ARM_NEXT_AWAY = 7
 ARM_NEXT_STAY = 8
 
+ARM_STATE = {
+    DISARM: "disarm",
+    ARM_AWAY: "away",
+    ARM_STAY: "stay",
+    ARM_STAY_INSTANT: "stay instant",
+    ARM_NIGHT: "night",
+    ARM_NIGHT_INSTANT: "night instant",
+    ARM_VACATION: "vacation",
+    ARM_NEXT_AWAY: "next away",
+    ARM_NEXT_STAY: "next stay",
+}
+
+# state for a whole area
 ARM_UP_NOT_READY = 0
 ARM_UP_READY = 1
 ARM_UP_READY_FORCE = 2
 ARM_UP_EXIT = 3
 ARM_UP_FULLY = 4
 ARM_UP_FORCE = 5
-ARM_UP_BYPASS =6
+ARM_UP_BYPASS = 6
 
-ALARM_INACTIVE = '0'
-ALARM_ENTRACE_DELAY = '1'
-ALARM_ABORT_DELAY = '2'
-ALARM_FIRE = '3'
-ALARM_MEDICAL = '4'
-ALARM_POLICE = '5'
-ALARM_BURGLAR = '6'
-ALARM_AUX1 = '7'
-ALARM_AUX2 = '8'
-ALARM_AUX3 = '9'
-ALARM_AUX4 = ':'
-ALARM_CO = ';'
-ALARM_EMERGENCY = '<'
-ALARM_FREEZE = '='
-ALARM_GAS = '>'
-ALARM_HEAT = '?'
-ALARM_WATER = '@'
-ALARM_FIRESUPER = 'A'
-ALARM_FIREVERIFY = 'B'
+AREA_STATE = {
+    ARM_UP_NOT_READY: "not ready",
+    ARM_UP_READY: "ready",
+    ARM_UP_READY_FORCE: "ready force",
+    ARM_UP_EXIT: "exit",
+    ARM_UP_FULLY: "fully",
+    ARM_UP_FORCE: "force",
+    ARM_UP_BYPASS: "bypass",
+}
+
+# ?If an area is armed (or stay or vacation or ???, basically
+# not disarmed), then this indicates why an alarm is going
+# off, or inactive if no alarm is going off...?
+
+# Area alarm types
+# And a reminder, inactive does not mean bypassed or
+# disabled. So can't look at a zone, see inactive and assume
+# that means there is no sensor there.
+ALARM_INACTIVE = "0"
+ALARM_ENTRACE_DELAY = "1"
+ALARM_ABORT_DELAY = "2"
+ALARM_FIRE = "3"
+ALARM_MEDICAL = "4"
+ALARM_POLICE = "5"
+ALARM_BURGLAR = "6"
+ALARM_AUX1 = "7"
+ALARM_AUX2 = "8"
+ALARM_AUX3 = "9"
+ALARM_AUX4 = ":"
+ALARM_CO = ";"
+ALARM_EMERGENCY = "<"
+ALARM_FREEZE = "="
+ALARM_GAS = ">"
+ALARM_HEAT = "?"
+ALARM_WATER = "@"
+ALARM_FIRESUPER = "A"
+ALARM_FIREVERIFY = "B"
+
+ALARM_TYPE = {
+    ALARM_INACTIVE: "inactive",
+    ALARM_ENTRACE_DELAY: "entrance delay",
+    ALARM_ABORT_DELAY: "abort delay",
+    ALARM_FIRE: "fire",
+    ALARM_MEDICAL: "medical",
+    ALARM_POLICE: "police",
+    ALARM_BURGLAR: "burglar",
+    ALARM_AUX1: "aux1",
+    ALARM_AUX2: "aux2",
+    ALARM_AUX3: "aux3",
+    ALARM_AUX4: "aux4",
+    ALARM_CO: "carbon monoxide",
+    ALARM_EMERGENCY: "emergency",
+    ALARM_FREEZE: "freeze",
+    ALARM_GAS: "gas",
+    ALARM_HEAT: "heat",
+    ALARM_WATER: "water",
+    ALARM_FIRESUPER: "fire supervisory",
+    ALARM_FIREVERIFY: "fire verify",
+}
 
 ZONE_STATUS_NORMAL_UNC = "0"
 ZONE_STATUS_NORMAL_OPEN = "1"
@@ -100,8 +155,8 @@ VERSION_RESP = "VN"
 LOG_REQ = "ld"
 LOG_RESP = "LD"
 
-ALARM_ZONE_REQ = "az"
-ALARM_ZONE_RESP = "AZ"
+ALARM_BY_ZONE_REQ = "az"
+ALARM_BY_ZONE_RESP = "AZ"
 
 ZONE_CHANGED_RESP = "ZC"
 
@@ -112,17 +167,17 @@ XEP_REQ = "xk"
 XEP_RESP = "XK"
 
 
-class ElkAccess:
+class ElkAccess(object):
   def __init__(self, address=None, port=None):
     f = open("elkrc","r")
     setup = "".join(f.readlines())
     f.close()
-    logging.info("elkrc: %s", setup)
+    logging.debug("elkrc: %s", setup)
 
     # elkrc is a textual python dictionary, so safely parse it
     # and turn it into an actual dictionary.
     self.values = ast.literal_eval(setup)
-    logging.info("values: %s", self.values)
+    logging.debug("values: %s", self.values)
 
     # must have a username and password
     self.username = self.values["username"]
@@ -146,54 +201,85 @@ class ElkAccess:
     self.socket_connected = False
     self.seen_connected = False
     self.sent_password = False
-    self.buf = ''
+    self.buf = ""
     if address is not None:
       self.connect()
 
-  def connect(self):
+  def Connect(self):
     self.socket_connected = False
     self.seen_connected = False
     self.sent_password = False
-    self.buf = ''
+    self.buf = ""
     self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     self.s = ssl.wrap_socket(self.s, ssl_version=ssl.PROTOCOL_TLSv1)
     self.s.connect((self.address, self.port))
     self.socket_connected = True
 
-  def connected(self):
+  def Connected(self):
     pass
 
-  def stupid_dump(self):
-    while True:
-      data = self.s.read()
-      if len(data)>0:
-        print len(data), data
-
-  def calc_checksum(self, msg):
+  def CalcChecksum(self, msg):
     chk = 0
     for x in msg:
       chk = (chk + ord(x)) & 0xFF;
     chk = 0x100 - chk
     return "%02X" % chk
 
-  def send_username(self):
+  def SendUserame(self):
     logging.info("sending username: %s", self.username)
     self.s.write("%s\015\012" % self.username)
 
-  def send_password(self):
+  def SendPassword(self):
     logging.info("sending password: %s", self.password)
     self.s.write("%s\015\012" % self.password)
     self.sent_password = True
 
-  def gen_request_arm(self):
-    pkt = "06as00"
-    pkt = pkt + self.calc_checksum(pkt)
+  def VersionRequest(self):
+    pkt = "06vn00"
+    pkt = pkt + self.CalcChecksum(pkt)
     return pkt + "\015\012"
 
-  def arm_state(self, arm_state, arm_up, alarm_state):
-    print "arm_state", arm_state
-    print "arm_up", arm_up
-    print "alarm_state", alarm_state
+  def ParseVersionResponse(self, msg_len, msg_type, sentence):
+    if msg_len != "36":
+      logging.error("Xep alive had wrong lenght: %s", msg_len)
+      return
+    m1_major = sentence[4:6]
+    m1_minor = sentence[6:8]
+    m1_release = sentence[8:10]
+
+    xep_major = sentence[10:12]
+    xep_minor = sentence[12:14]
+    xep_release = sentence[14:16]
+
+    s = "m1: %s.%s.%s  xep: %s.%s.%s" % (
+        m1_major, m1_minor, m1_release, xep_major, xep_minor, xep_release)
+    print s
+
+  def ArmStateRequest(self):
+    pkt = "06as00"
+    pkt = pkt + self.CalcChecksum(pkt)
+    return pkt + "\015\012"
+
+  def ParseArmState(self, msg_len, msg_type, sentence):
+    if len(sentence)<32:
+      logging.error("arm state had wrong length: %s", msg_len)
+      return
+
+    arm_status = []
+    for s in sentence[4:12]:
+      arm_status.append(ARM_STATE.get(int(s), "unknown"))
+
+    arm_up = []
+    for s in sentence[12:20]:
+      arm_up.append(AREA_STATE.get(int(s), "unknown"))
+
+    alarm_state = []
+    for s in sentence[20:28]:
+      alarm_state.append(ALARM_TYPE.get(s, "unknown"))
+
+    print "area arm_status:", arm_status
+    print "area arm_up:", arm_up
+    print "area alarm_state:", alarm_state
 
   def ParseXep(self, msg_len, msg_type, sentence):
     if msg_len != "16":
@@ -215,14 +301,26 @@ class ElkAccess:
         dow, dst, mode, disp)
     print s
 
-  def ParseZone(self, msg_len, msg_type, sentence):
-    if msg_len != "D6":
-      logging.error("zone had wrong lenght: %s", msg_len)
-      return
-    # last 2 characters are the checksum
-    zones = sentence[4:-2]
-    print "zones: ", len(zones), zones
+  def AlarmByZoneRequest(self):
+    pkt = "06az00"
+    pkt = pkt + self.CalcChecksum(pkt)
+    return pkt + "\015\012"
 
+  def ParseAlarmByZone(self, msg_len, msg_type, sentence):
+    if msg_len != "D6":
+      logging.error("zone had wrong length: %s", msg_len)
+      return
+    # last 2 characters are the checksum and 2 before that
+    # are always 00
+    zones = sentence[4:-4]
+    if len(zones) != 208:
+      logging.error("alarm zone had wrong number of zones: %d", len(zones))
+      return
+    for i in xrange(len(zones)):
+      z = zones[i]
+      desc = ALARM_TYPE.get(z, "unknown")
+      print "%03d: %s (%s)" % (i, desc, z)
+      
   def ParseZoneChanged(self, msg_len, msg_type, sentence):
     if msg_len != "0A":
       logging.error("zone changed had wrong lenght: %s", msg_len)
@@ -232,7 +330,7 @@ class ElkAccess:
     status = sentence[7]
     print "zone: %s status: %s (%s)" % (zone, ZONE_STATUS[status], status)
 
-  def read_sentence(self, sentence):
+  def ReadSentence(self, sentence):
     sentence = sentence[:-2]
     logging.info("sentence: %s", sentence)
     if len(sentence)<6:
@@ -245,47 +343,41 @@ class ElkAccess:
         (sentence.startswith("Elk-M1XEP: Login successful."))):
         # we saw a successful login message
         self.seen_connected = True
-        self.connected()
+        self.Connected()
 
 #        if ((not self.seen_connected) and 
 #            (self.sent_password or self.password==None)):
 #            # we saw a sentence, and we sent our password
 #            self.seen_connected = True
-#            self.connected()
+#            self.Connected()
 
     if msg_type == ARM_STATUS_RESP:
-      if len(sentence)<32:
-        print "malformed sentence", sentence
-      else:
-        arm_status = sentence[4:12]
-        arm_up = sentence[12:20]
-        alarm_state = sentence[20:28]
-
-        self.last_arm_state = [int(x) for x in arm_status]
-
-        self.arm_state( [int(x) for x in arm_status],
-                        [int(x) for x in arm_up],
-                        [x for x in alarm_state] )
+      self.ParseArmState(msg_len, msg_type, sentence)
     elif msg_type == XEP_RESP:
       self.ParseXep(msg_len, msg_type, sentence)
-    elif msg_type == ALARM_ZONE_RESP:
-      self.ParseZone(msg_len, msg_type, sentence)
+    elif msg_type == ALARM_BY_ZONE_RESP:
+      self.ParseAlarmByZone(msg_len, msg_type, sentence)
     elif msg_type == ZONE_CHANGED_RESP:
       self.ParseZoneChanged(msg_len, msg_type, sentence)
+    elif msg_type == VERSION_RESP:
+      self.ParseVersionResponse(msg_len, msg_type, sentence)
     else:
-      pass
+      logging.warning("unexpected sentence: %s %s %s",
+         msg_len, msg_type, sentence)
 
   def bufferize(self):
-      self.buf='';
+      self.buf="";
       while True:
         while not self.socket_connected:
           try:
             logging.info("ELK: (re)connecting")
-            self.connect()
+            self.Connect()
             logging.info("ELK: (re)connected")
           except Exception as e:
             logging.error("ELK: connection failed: %s", e)
             traceback.print_exc()
+            # if we can't connect, delay for a bit and try again...
+            time.sleep(1)
 
         try:
           self.bufferize_once()
@@ -302,37 +394,45 @@ class ElkAccess:
     for char in data:
       self.buf = self.buf + char
       if self.buf.endswith("Username:"):
-        self.send_username()
-        self.buf=''
+        self.SendUserame()
+        self.buf=""
       elif self.buf.endswith("Password:"):
-        self.send_password()
-        self.buf=''
+        self.SendPassword()
+        self.buf=""
       elif self.buf.endswith("\015\012"):
-        self.read_sentence(self.buf)
-        self.buf=''
+        self.ReadSentence(self.buf)
+        self.buf=""
+
+# Really want to do a more general purpose class that can send and respond
+# to the elk instead of different classes for different sends
+# but a common response (ie, not the current mechanism).
+# So how to handle async data coming from elkd? Thread that just reads
+# the socket and handles what is seen there?
 
 class ElkArmStatePrinter(ElkAccess):
   def __init__(self, address=None, port=None):
     ElkAccess.__init__(self, address, port)
 
-  def connected(self):
-    print "connected"
-    self.s.write(self.gen_request_arm())
+  def Connected(self):
+    print "Connected"
+    self.s.write(self.VersionRequest())
+    self.s.write(self.AlarmByZoneRequest())
+    self.s.write(self.ArmStateRequest())
 
-def checksum_test_pkt(pkt):
+def ChecksumTestPacket(pkt):
   correct_sum = pkt[-2:]
   pkt = pkt[:-2]
 
-  chk = ElkAccess().calc_checksum(pkt)
+  chk = ElkAccess().CalcChecksum(pkt)
   if (correct_sum != chk):
     print "checksum test fail, pkt=%s, correct_sum=%s, calc_sum=%s" % (pkt, correct_sum, chk)
 
-def checksum_test():
-  checksum_test_pkt("0DCV0100123003C")
-  checksum_test_pkt("08cv0100FE")
-  checksum_test_pkt("13TR01200726875000000")
-  checksum_test_pkt("11KF01C200000000087")
-  checksum_test_pkt("16KA12345678111111110081")
+def ChecksumTest():
+  ChecksumTestPacket("0DCV0100123003C")
+  ChecksumTestPacket("08cv0100FE")
+  ChecksumTestPacket("13TR01200726875000000")
+  ChecksumTestPacket("11KF01C200000000087")
+  ChecksumTestPacket("16KA12345678111111110081")
 
 def main():
   logging.basicConfig(level=logging.INFO)
