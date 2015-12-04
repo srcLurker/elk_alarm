@@ -1,9 +1,9 @@
 #!env /usr/bin/python
 """Access the elk M1 via the ethernet XEP module.
 
-When an alarm state changes, requests the zone the changed.
+When an alarm state changes, requests the zone that changed.
 
-Loosly based on the elkm1py code from:
+Loosly based on the elkm1.py code from:
 
 https://github.com/sbelectronics/pi-controller
 """
@@ -365,31 +365,55 @@ class ElkAccess(object):
       logging.warning("unexpected sentence: %s %s %s",
          msg_len, msg_type, sentence)
 
-  def bufferize(self):
-      self.buf="";
-      while True:
-        while not self.socket_connected:
-          try:
-            logging.info("ELK: (re)connecting")
-            self.Connect()
-            logging.info("ELK: (re)connected")
-          except Exception as e:
-            logging.error("ELK: connection failed: %s", e)
-            traceback.print_exc()
-            # if we can't connect, delay for a bit and try again...
-            time.sleep(1)
+  def HandleOneBuffer(self):
+    """Handle one buffer line and connect if necessary.
 
-        try:
-          self.bufferize_once()
-        except Exception as e:
-          logging.error("ELK: exception in bufferize_once: %s", e)
-          logging.error("ELK: sleeping before reconnecting")
-          # let's not hammer the Elk too hard if there is a problem.
-          time.sleep(30)
-          self.socket_connected = False
-          traceback.print_exc()
+       Blocks while waiting to handle one buffer line.
+       Will connect (or reconnect) if it is not already connected.
 
-  def bufferize_once(self):
+       Returns:
+         None
+    """
+    # only way out is to be connected...
+    while not self.socket_connected:
+      try:
+        logging.info("ELK: (re)connecting")
+        self.Connect()
+        logging.info("ELK: (re)connected")
+      except Exception as e:
+        logging.error("ELK: connection failed: %s", e)
+        traceback.print_exc()
+        # if we can't connect, delay for a bit and try again...
+        time.sleep(1)
+
+    try:
+      self._BufferAndParse()
+    except Exception as e:
+      logging.error("ELK: exception in _BufferAndParse: %s", e)
+      traceback.print_exc()
+      logging.error("ELK: sleeping before reconnecting")
+
+      # kill the connection in a polite (but immediate) way
+      self.s.shutdown(socket.SHUT_RDWR)
+      self.s.close()
+      self.s = None
+      self.socket_connected = False
+      # let's not hammer the Elk too hard if there is a problem.
+      time.sleep(30)
+
+  def _BufferAndParse(self):
+    """Read data from socket looking for end of line or keywords.
+
+       Blocks until "enough" data has been read in.
+
+       Once the data is found, it reacts to the data by sending
+       stuff in response to the keyword (for example, sending
+       a user name in response to seeing Username:) or parsing
+       a response and handling it.
+
+       Returns:
+         None
+    """
     data = self.s.read()
     for char in data:
       self.buf = self.buf + char
@@ -437,7 +461,8 @@ def ChecksumTest():
 def main():
   logging.basicConfig(level=logging.INFO)
   elk = ElkArmStatePrinter()
-  elk.bufferize()
+  while True:
+    elk.HandleOneBuffer()
 
 if __name__ == "__main__":
   main()
