@@ -1,9 +1,9 @@
 #!env /usr/bin/python
 """Access the elk M1 via the ethernet XEP module.
 
-When an alarm state changes, requests the zone the changed.
+When an alarm state changes, requests the zone that changed.
 
-Loosly based on the elkm1py code from:
+Loosly based on the elkm1.py code from:
 
 https://github.com/sbelectronics/pi-controller
 """
@@ -239,7 +239,7 @@ class ElkAccess(object):
     pkt = pkt + self.CalcChecksum(pkt)
     return pkt + "\015\012"
 
-  def ParseVersionResponse(self, msg_len, msg_type, sentence):
+  def ParseVersionResponse(self, now, msg_len, msg_type, sentence):
     if msg_len != "36":
       logging.error("Xep alive had wrong lenght: %s", msg_len)
       return
@@ -253,14 +253,14 @@ class ElkAccess(object):
 
     s = "m1: %s.%s.%s  xep: %s.%s.%s" % (
         m1_major, m1_minor, m1_release, xep_major, xep_minor, xep_release)
-    print s
+    return s
 
   def ArmStateRequest(self):
     pkt = "06as00"
     pkt = pkt + self.CalcChecksum(pkt)
     return pkt + "\015\012"
 
-  def ParseArmState(self, msg_len, msg_type, sentence):
+  def ParseArmState(self, now, msg_len, msg_type, sentence):
     if len(sentence)<32:
       logging.error("arm state had wrong length: %s", msg_len)
       return
@@ -277,11 +277,14 @@ class ElkAccess(object):
     for s in sentence[20:28]:
       alarm_state.append(ALARM_TYPE.get(s, "unknown"))
 
-    print "area arm_status:", arm_status
-    print "area arm_up:", arm_up
-    print "area alarm_state:", alarm_state
+    d = {
+      "area arm_status": arm_status,
+      "area arm_up": arm_up,
+      "area alarm_state": alarm_state,
+    }
+    return repr(d)
 
-  def ParseXep(self, msg_len, msg_type, sentence):
+  def ParseXep(self, now, msg_len, msg_type, sentence):
     if msg_len != "16":
       logging.error("Xep alive had wrong lenght: %s", msg_len)
       return
@@ -299,14 +302,14 @@ class ElkAccess(object):
     s = "%s/%s/%s %s:%s:%s dow: %s dst: %s mode: %s disp: %s" % (
         month, day, year, hours, minutes, seconds,
         dow, dst, mode, disp)
-    print s
+    return s
 
   def AlarmByZoneRequest(self):
     pkt = "06az00"
     pkt = pkt + self.CalcChecksum(pkt)
     return pkt + "\015\012"
 
-  def ParseAlarmByZone(self, msg_len, msg_type, sentence):
+  def ParseAlarmByZone(self, now, msg_len, msg_type, sentence):
     if msg_len != "D6":
       logging.error("zone had wrong length: %s", msg_len)
       return
@@ -316,28 +319,32 @@ class ElkAccess(object):
     if len(zones) != 208:
       logging.error("alarm zone had wrong number of zones: %d", len(zones))
       return
+    r = []
     for i in xrange(len(zones)):
       z = zones[i]
       desc = ALARM_TYPE.get(z, "unknown")
-      print "%03d: %s (%s)" % (i, desc, z)
+      r.append("%03d: %s (%s)" % (i, desc, z))
+
+    return repr(r)
       
-  def ParseZoneChanged(self, msg_len, msg_type, sentence):
+  def ParseZoneChanged(self, now, msg_len, msg_type, sentence):
     if msg_len != "0A":
       logging.error("zone changed had wrong lenght: %s", msg_len)
       return
     # last 2 characters are the checksum
     zone = sentence[4:7]
     status = sentence[7]
-    print "zone: %s status: %s (%s)" % (zone, ZONE_STATUS[status], status)
+    return "zone: %s status: %s (%s)" % (zone, ZONE_STATUS[status], status)
 
   def ReadSentence(self, sentence):
+    # now as milliseconds since blah blah
+    now = int(time.time() * 1000)
+
+    # strip <CR> and <LF>
     sentence = sentence[:-2]
     logging.info("sentence: %s", sentence)
-    if len(sentence)<6:
+    if len(sentence) < 6:
         return
-
-    msg_len = sentence[0:2]
-    msg_type = sentence[2:4]
 
     if ((not self.seen_connected) and 
         (sentence.startswith("Elk-M1XEP: Login successful."))):
@@ -345,51 +352,75 @@ class ElkAccess(object):
         self.seen_connected = True
         self.Connected()
 
-#        if ((not self.seen_connected) and 
-#            (self.sent_password or self.password==None)):
-#            # we saw a sentence, and we sent our password
-#            self.seen_connected = True
-#            self.Connected()
-
+    msg_len = sentence[0:2]
+    msg_type = sentence[2:4]
     if msg_type == ARM_STATUS_RESP:
-      self.ParseArmState(msg_len, msg_type, sentence)
+      out = self.ParseArmState(now, msg_len, msg_type, sentence)
     elif msg_type == XEP_RESP:
-      self.ParseXep(msg_len, msg_type, sentence)
+      out = self.ParseXep(now, msg_len, msg_type, sentence)
     elif msg_type == ALARM_BY_ZONE_RESP:
-      self.ParseAlarmByZone(msg_len, msg_type, sentence)
+      out = self.ParseAlarmByZone(now, msg_len, msg_type, sentence)
     elif msg_type == ZONE_CHANGED_RESP:
-      self.ParseZoneChanged(msg_len, msg_type, sentence)
+      out = self.ParseZoneChanged(now, msg_len, msg_type, sentence)
     elif msg_type == VERSION_RESP:
-      self.ParseVersionResponse(msg_len, msg_type, sentence)
+      out = self.ParseVersionResponse(now, msg_len, msg_type, sentence)
     else:
       logging.warning("unexpected sentence: %s %s %s",
          msg_len, msg_type, sentence)
+      out = None
 
-  def bufferize(self):
-      self.buf="";
-      while True:
-        while not self.socket_connected:
-          try:
-            logging.info("ELK: (re)connecting")
-            self.Connect()
-            logging.info("ELK: (re)connected")
-          except Exception as e:
-            logging.error("ELK: connection failed: %s", e)
-            traceback.print_exc()
-            # if we can't connect, delay for a bit and try again...
-            time.sleep(1)
+    if out:
+      print "%d: %s" % (now, out)
 
-        try:
-          self.bufferize_once()
-        except Exception as e:
-          logging.error("ELK: exception in bufferize_once: %s", e)
-          logging.error("ELK: sleeping before reconnecting")
-          # let's not hammer the Elk too hard if there is a problem.
-          time.sleep(30)
-          self.socket_connected = False
-          traceback.print_exc()
+  def HandleOneBuffer(self):
+    """Handle one buffer line and connect if necessary.
 
-  def bufferize_once(self):
+       Blocks while waiting to handle one buffer line.
+       Will connect (or reconnect) if it is not already connected.
+
+       Returns:
+         None
+    """
+    # only way out is to be connected...
+    while not self.socket_connected:
+      try:
+        logging.info("ELK: (re)connecting")
+        self.Connect()
+        logging.info("ELK: (re)connected")
+      except Exception as e:
+        logging.error("ELK: connection failed: %s", e)
+        traceback.print_exc()
+        # if we can't connect, delay for a bit and try again...
+        time.sleep(1)
+
+    try:
+      self._BufferAndParse()
+    except Exception as e:
+      logging.error("ELK: exception in _BufferAndParse: %s", e)
+      traceback.print_exc()
+      logging.error("ELK: sleeping before reconnecting")
+
+      # kill the connection in a polite (but immediate) way
+      self.s.shutdown(socket.SHUT_RDWR)
+      self.s.close()
+      self.s = None
+      self.socket_connected = False
+      # let's not hammer the Elk too hard if there is a problem.
+      time.sleep(30)
+
+  def _BufferAndParse(self):
+    """Read data from socket looking for end of line or keywords.
+
+       Blocks until "enough" data has been read in.
+
+       Once the data is found, it reacts to the data by sending
+       stuff in response to the keyword (for example, sending
+       a user name in response to seeing Username:) or parsing
+       a response and handling it.
+
+       Returns:
+         None
+    """
     data = self.s.read()
     for char in data:
       self.buf = self.buf + char
@@ -434,10 +465,12 @@ def ChecksumTest():
   ChecksumTestPacket("11KF01C200000000087")
   ChecksumTestPacket("16KA12345678111111110081")
 
+LOG_FORMAT = "%(levelname)0.1s:%(created)0.3f:%(message)s"
 def main():
-  logging.basicConfig(level=logging.INFO)
+  logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
   elk = ElkArmStatePrinter()
-  elk.bufferize()
+  while True:
+    elk.HandleOneBuffer()
 
 if __name__ == "__main__":
   main()
