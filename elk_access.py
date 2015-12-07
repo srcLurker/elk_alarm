@@ -9,6 +9,7 @@ https://github.com/sbelectronics/pi-controller
 """
 
 import ast
+import csv
 import logging
 import socket
 import ssl
@@ -205,6 +206,25 @@ class ElkAccess(object):
     if address is not None:
       self.connect()
 
+    self.zones_info = {}
+    self.zones = {}
+    # Get the zone information.
+    with open("AlarmZoneInfo.csv", "r") as f:
+      csvr = csv.DictReader(f)
+      for row in csvr:
+        zone = int(row["Zone"])
+        desc = row["Description"]
+        d = row["Definition"]
+        t = row["Type"]
+        zone_info = {
+          "zone": zone,
+          "description": desc,
+          "definition": d,
+          "type": t,
+        }
+        self.zones_info[zone] = zone_info
+        self.zones[zone] = desc
+
   def Connect(self):
     self.socket_connected = False
     self.seen_connected = False
@@ -234,12 +254,16 @@ class ElkAccess(object):
     self.s.write("%s\015\012" % self.password)
     self.sent_password = True
 
+  def StdTime(self, now_ms):
+    t = time.localtime(now_ms / 1000.0)
+    return time.strftime("%a_%Y%m%d_%H:%M:%S", t)
+
   def VersionRequest(self):
     pkt = "06vn00"
     pkt = pkt + self.CalcChecksum(pkt)
     return pkt + "\015\012"
 
-  def ParseVersionResponse(self, now, msg_len, msg_type, sentence):
+  def ParseVersionResponse(self, now_ms, msg_len, msg_type, sentence):
     if msg_len != "36":
       logging.error("Xep alive had wrong lenght: %s", msg_len)
       return
@@ -260,7 +284,7 @@ class ElkAccess(object):
     pkt = pkt + self.CalcChecksum(pkt)
     return pkt + "\015\012"
 
-  def ParseArmState(self, now, msg_len, msg_type, sentence):
+  def ParseArmState(self, now_ms, msg_len, msg_type, sentence):
     if len(sentence)<32:
       logging.error("arm state had wrong length: %s", msg_len)
       return
@@ -284,7 +308,7 @@ class ElkAccess(object):
     }
     return repr(d)
 
-  def ParseXep(self, now, msg_len, msg_type, sentence):
+  def ParseXep(self, now_ms, msg_len, msg_type, sentence):
     if msg_len != "16":
       logging.error("Xep alive had wrong lenght: %s", msg_len)
       return
@@ -309,7 +333,7 @@ class ElkAccess(object):
     pkt = pkt + self.CalcChecksum(pkt)
     return pkt + "\015\012"
 
-  def ParseAlarmByZone(self, now, msg_len, msg_type, sentence):
+  def ParseAlarmByZone(self, now_ms, msg_len, msg_type, sentence):
     if msg_len != "D6":
       logging.error("zone had wrong length: %s", msg_len)
       return
@@ -327,18 +351,20 @@ class ElkAccess(object):
 
     return repr(r)
       
-  def ParseZoneChanged(self, now, msg_len, msg_type, sentence):
+  def ParseZoneChanged(self, now_ms, msg_len, msg_type, sentence):
     if msg_len != "0A":
       logging.error("zone changed had wrong lenght: %s", msg_len)
       return
     # last 2 characters are the checksum
     zone = sentence[4:7]
     status = sentence[7]
-    return "zone: %s status: %s (%s)" % (zone, ZONE_STATUS[status], status)
+    desc = self.zones[int(zone)]
+    return "%s zone: <%s> (%s) status: %s (%s)" % (
+        self.StdTime(now_ms), desc, zone, ZONE_STATUS[status], status)
 
   def ReadSentence(self, sentence):
     # now as milliseconds since blah blah
-    now = int(time.time() * 1000)
+    now_ms = int(time.time() * 1000)
 
     # strip <CR> and <LF>
     sentence = sentence[:-2]
@@ -355,22 +381,22 @@ class ElkAccess(object):
     msg_len = sentence[0:2]
     msg_type = sentence[2:4]
     if msg_type == ARM_STATUS_RESP:
-      out = self.ParseArmState(now, msg_len, msg_type, sentence)
+      out = self.ParseArmState(now_ms, msg_len, msg_type, sentence)
     elif msg_type == XEP_RESP:
-      out = self.ParseXep(now, msg_len, msg_type, sentence)
+      out = self.ParseXep(now_ms, msg_len, msg_type, sentence)
     elif msg_type == ALARM_BY_ZONE_RESP:
-      out = self.ParseAlarmByZone(now, msg_len, msg_type, sentence)
+      out = self.ParseAlarmByZone(now_ms, msg_len, msg_type, sentence)
     elif msg_type == ZONE_CHANGED_RESP:
-      out = self.ParseZoneChanged(now, msg_len, msg_type, sentence)
+      out = self.ParseZoneChanged(now_ms, msg_len, msg_type, sentence)
     elif msg_type == VERSION_RESP:
-      out = self.ParseVersionResponse(now, msg_len, msg_type, sentence)
+      out = self.ParseVersionResponse(now_ms, msg_len, msg_type, sentence)
     else:
       logging.warning("unexpected sentence: %s %s %s",
          msg_len, msg_type, sentence)
       out = None
 
     if out:
-      print "%d: %s" % (now, out)
+      print "%d: %s" % (now_ms, out)
 
   def HandleOneBuffer(self):
     """Handle one buffer line and connect if necessary.
