@@ -17,6 +17,8 @@ import sys
 import time
 import traceback
 
+import sql_access
+
 # Whether or not the alarm is armed and if so
 # which of the various armed states (away, night, vacation, etc)
 DISARM = 0
@@ -224,6 +226,7 @@ class ElkAccess(object):
         }
         self.zones_info[zone] = zone_info
         self.zones[zone] = desc
+    self.sql = sql_access.SaveToSql()
 
   def Connect(self):
     self.socket_connected = False
@@ -256,7 +259,7 @@ class ElkAccess(object):
 
   def StdTime(self, now_ms):
     t = time.localtime(now_ms / 1000.0)
-    return time.strftime("%a_%Y%m%d_%H:%M:%S", t)
+    return time.strftime("%a_%Y%m%d_%H%M%S", t)
 
   def VersionRequest(self):
     pkt = "06vn00"
@@ -275,7 +278,8 @@ class ElkAccess(object):
     xep_minor = sentence[12:14]
     xep_release = sentence[14:16]
 
-    s = "m1: %s.%s.%s  xep: %s.%s.%s" % (
+    s = "%s m1: %s.%s.%s  xep: %s.%s.%s" % (
+        self.StdTime(now_ms),
         m1_major, m1_minor, m1_release, xep_major, xep_minor, xep_release)
     return s
 
@@ -323,7 +327,8 @@ class ElkAccess(object):
     mode = sentence[18]
     disp = sentence[19]
 
-    s = "%s/%s/%s %s:%s:%s dow: %s dst: %s mode: %s disp: %s" % (
+    s = "%s %s/%s/%s %s:%s:%s dow: %s dst: %s mode: %s disp: %s" % (
+        self.StdTime(now_ms),
         month, day, year, hours, minutes, seconds,
         dow, dst, mode, disp)
     return s
@@ -349,7 +354,8 @@ class ElkAccess(object):
       desc = ALARM_TYPE.get(z, "unknown")
       r.append("%03d: %s (%s)" % (i, desc, z))
 
-    return repr(r)
+    return "%s %s" % (
+      self.StdTime(now_ms), repr(r))
       
   def ParseZoneChanged(self, now_ms, msg_len, msg_type, sentence):
     if msg_len != "0A":
@@ -359,6 +365,12 @@ class ElkAccess(object):
     zone = sentence[4:7]
     status = sentence[7]
     desc = self.zones[int(zone)]
+
+    # Persist to sql
+    self.sql.CreateIfNeeded()
+    self.sql.StoreZone(now_ms, int(zone), int(status), sentence)
+
+    # and send back for printing
     return "%s zone: <%s> (%s) status: %s (%s)" % (
         self.StdTime(now_ms), desc, zone, ZONE_STATUS[status], status)
 
