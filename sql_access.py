@@ -2,8 +2,9 @@
 """ Create the table for holding alarm data.
 """
 
-import sqlite3
+import datetime
 import os
+import sqlite3
 import sys
 import time
 
@@ -32,9 +33,11 @@ class SaveToSql(object):
 
   def CreateIfNeeded(self):
     """Create the sql database if it doesn't already exist."""
-    now = time.time()
-    l = time.gmtime(now)
-    dt = time.strftime("%a_%Y%m%d", l)
+    # we want one database per week for now to keep the data from
+    # growing too big for sqlite. Format is YYYY_WW where YYYY
+    # is the 4 digit year and WW is the 2 digit week number
+    isocal = datetime.date.isocalendar(datetime.datetime.utcnow())
+    dt = "%04d_%02d" % (isocal[0], isocal[1])
     self._fname = "%s_%s.sqlite3" % (self._prefix, dt)
 
     if not os.access(self._fname, os.F_OK):
