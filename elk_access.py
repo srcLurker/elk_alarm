@@ -17,6 +17,7 @@ import sys
 import time
 import traceback
 
+import gmailer
 import sql_access
 
 # Whether or not the alarm is armed and if so
@@ -112,22 +113,24 @@ ALARM_TYPE = {
     ALARM_FIREVERIFY: "fire verify",
 }
 
-ZONE_STATUS_NORMAL_UNC = "0"
-ZONE_STATUS_NORMAL_OPEN = "1"
-ZONE_STATUS_NORMAL_EOL = "2"
-ZONE_STATUS_NORMAL_SHORT = "3"
-ZONE_STATUS_NOT_USED_1 = "4"
-ZONE_STATUS_TROUBLE_OPEN = "5"
-ZONE_STATUS_TROUBLE_EOL = "6"
-ZONE_STATUS_TROUBLE_SHORT = "7"
-ZONE_STATUS_NOT_USED_2 = "8"
-ZONE_STATUS_VIOLATED_OPEN = "9"
-ZONE_STATUS_VIOLATED_EOL = "A"
-ZONE_STATUS_VIOLATED_SHORT = "B"
-ZONE_STATUS_NOT_USED_3 = "C"
-ZONE_STATUS_BYPASSED_OPEN = "D"
-ZONE_STATUS_BYPASSED_EOL = "E"
-ZONE_STATUS_BYPASSED_SHORT = "F"
+# Zone status is a hex value, convert to int
+# and use here
+ZONE_STATUS_NORMAL_UNC = 0x0
+ZONE_STATUS_NORMAL_OPEN = 0x1
+ZONE_STATUS_NORMAL_EOL = 0x2
+ZONE_STATUS_NORMAL_SHORT = 0x3
+ZONE_STATUS_NOT_USED_1 = 0x4
+ZONE_STATUS_TROUBLE_OPEN = 0x5
+ZONE_STATUS_TROUBLE_EOL = 0x6
+ZONE_STATUS_TROUBLE_SHORT = 0x7
+ZONE_STATUS_NOT_USED_2 = 0x8
+ZONE_STATUS_VIOLATED_OPEN = 0x9
+ZONE_STATUS_VIOLATED_EOL = 0xA
+ZONE_STATUS_VIOLATED_SHORT = 0xB
+ZONE_STATUS_NOT_USED_3 = 0xC
+ZONE_STATUS_BYPASSED_OPEN = 0xD
+ZONE_STATUS_BYPASSED_EOL = 0xE
+ZONE_STATUS_BYPASSED_SHORT = 0xF
 
 ZONE_STATUS = {
     ZONE_STATUS_NORMAL_UNC: "unconfigured",
@@ -147,6 +150,28 @@ ZONE_STATUS = {
     ZONE_STATUS_BYPASSED_EOL: "bypassed eol",
     ZONE_STATUS_BYPASSED_SHORT: "bypassed short",
 }
+
+# Sensor use/definition
+# Entry was door enter/exit delay related
+# perimeter seemed like immediate alarm when night, stay, vacation
+# interior was used for motion sensors
+# Water sensors 
+SENSOR_UNKNOWN = 0
+SENSOR_ENTRY_1 = 1
+SENSOR_ENTRY_2 = 2
+SENSOR_PERIMETER = 3
+SENSOR_INTERIOR = 4
+SENSOR_WATER = 25
+
+# Send an email for sensors defined as...
+WANT_EMAIL = set(
+    [SENSOR_ENTRY_1, SENSOR_ENTRY_2, SENSOR_PERIMETER, SENSOR_WATER]
+    )
+
+# Sensor type
+# 0 was contact sensor of some sort (on/off which included motion)
+# 2 was water. Don't know what the others were.
+
 
 DEFAULT_IP = "192.168.1.2"
 DEFAULT_PORT = 2601
@@ -200,6 +225,19 @@ class ElkAccess(object):
     else:
       self.port = int(self.values.get("port", DEFAULT_PORT))
 
+    # if the elkrc file has an email account and email password
+    # then enable sending emails when appropriate
+    email = self.values.get("email_from", None)
+    epassword = self.values.get("email_password", None)
+    email_to = self.values.get("email_to", None)
+    if email and epassword and email_to:
+      self.mailer = gmailer.Gmailer(email, epassword)
+      self.email_to = email_to
+      logging.info("Email setup from: %s to: %s", email, email_to)
+    else:
+      self.mailer = None
+      self.email_to = None
+      logging.warning("Email is not setup")
 
     self.socket_connected = False
     self.seen_connected = False
@@ -216,8 +254,8 @@ class ElkAccess(object):
       for row in csvr:
         zone = int(row["Zone"])
         desc = row["Description"]
-        d = row["Definition"]
-        t = row["Type"]
+        d = int(row["Definition"])
+        t = int(row["Type"])
         zone_info = {
           "zone": zone,
           "description": desc,
@@ -361,18 +399,43 @@ class ElkAccess(object):
     if msg_len != "0A":
       logging.error("zone changed had wrong lenght: %s", msg_len)
       return
-    # last 2 characters are the checksum
-    zone = sentence[4:7]
-    status = sentence[7]
-    desc = self.zones[int(zone)]
+
+    zone = int(sentence[4:7])
+    # status is a hex byte - convert that to an int...
+    status = int(sentence[7], 16)
+
+    vals = self.zones_info[zone]
+    sensor_def = vals["definition"]
 
     # Persist to sql
     self.sql.CreateIfNeeded()
-    self.sql.StoreZone(now_ms, int(zone), int(status), sentence)
+    self.sql.StoreZone(now_ms, zone, status, sensor_def, sentence)
+
+    desc = vals["description"]
+    when = self.StdTime(now_ms)
+
+    # for now, status 1, 2, 3 means closed, all else means opened
+    # and see how that works out...
+    if status < ZONE_STATUS_NOT_USED_1:
+      changed = "closed"
+    else:
+      changed = "opened"
+
+    # And generate an email if we can (and desired)
+    # Assumption, emails won't spam the gmail server...
+    # may want to validate that assumption and queue up
+    # emails in the future (to allow for a batch send of all messages
+    # in the last N seconds.
+    if self.mailer and (sensor_def in WANT_EMAIL):
+      body = "<%s> (%03d) changed to %s (0x%x) at %s" % (
+          desc, zone, changed, status, when)
+      subject = "alarm <%s> %s" % (desc, changed)
+      self.mailer.SendEmail(self.email_to, subject, body)
+      logging.info("email sent: <%s> <%s>", subject, body)
 
     # and send back for printing
-    return "%s zone: <%s> (%s) status: %s (%s)" % (
-        self.StdTime(now_ms), desc, zone, ZONE_STATUS[status], status)
+    return "%s zone: <%s> (%03d) status: %s ([%s] 0x%x)" % (
+        when, desc, zone, changed, ZONE_STATUS[status], status)
 
   def ReadSentence(self, sentence):
     # now as milliseconds since blah blah
