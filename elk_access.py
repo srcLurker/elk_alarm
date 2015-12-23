@@ -404,11 +404,13 @@ class ElkAccess(object):
     # status is a hex byte - convert that to an int...
     status = int(sentence[7], 16)
 
+    vals = self.zones_info[zone]
+    sensor_def = vals["definition"]
+
     # Persist to sql
     self.sql.CreateIfNeeded()
-    self.sql.StoreZone(now_ms, zone, status, sentence)
+    self.sql.StoreZone(now_ms, zone, status, sensor_def, sentence)
 
-    vals = self.zones_info[zone]
     desc = vals["description"]
     when = self.StdTime(now_ms)
 
@@ -424,11 +426,10 @@ class ElkAccess(object):
     # may want to validate that assumption and queue up
     # emails in the future (to allow for a batch send of all messages
     # in the last N seconds.
-    sensor_def = vals["definition"]
     if self.mailer and (sensor_def in WANT_EMAIL):
       body = "<%s> (%03d) changed to %s (0x%x) at %s" % (
           desc, zone, changed, status, when)
-      subject = "alarm %03d %s" % (zone, changed)
+      subject = "alarm <%s> %s" % (desc, changed)
       self.mailer.SendEmail(self.email_to, subject, body)
       logging.info("email sent: <%s> <%s>", subject, body)
 
