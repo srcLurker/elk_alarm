@@ -172,6 +172,9 @@ WANT_EMAIL = set(
 # 0 was contact sensor of some sort (on/off which included motion)
 # 2 was water. Don't know what the others were.
 
+ZONE_UNKNOWN = -1
+COMMAND_UNKNOWN = -1
+
 
 DEFAULT_IP = "192.168.1.2"
 DEFAULT_PORT = 2601
@@ -179,20 +182,25 @@ DEFAULT_CODE = 0000
 
 VERSION_REQ = "vn"
 VERSION_RESP = "VN"
+COMMAND_VERSION = -2
 
 LOG_REQ = "ld"
 LOG_RESP = "LD"
+COMMAND_LOG = -3
 
 ALARM_BY_ZONE_REQ = "az"
 ALARM_BY_ZONE_RESP = "AZ"
+COMMAND_ALARM_BY_ZONE = -4
 
 ZONE_CHANGED_RESP = "ZC"
 
 ARM_STATUS_REQ = "as"
 ARM_STATUS_RESP = "AS"
+COMMAND_ARM = -5
 
 XEP_REQ = "xk"
 XEP_RESP = "XK"
+COMMAND_XEP = -6
 
 
 class ElkAccess(object):
@@ -315,6 +323,9 @@ class ElkAccess(object):
     xep_major = sentence[10:12]
     xep_minor = sentence[12:14]
     xep_release = sentence[14:16]
+    self.sql.CreateIfNeeded()
+    self.sql.StoreZone(
+        now_ms, ZONE_UNKNOWN, COMMAND_VERSION, SENSOR_UNKNOWN, sentence)
 
     s = "%s m1: %s.%s.%s  xep: %s.%s.%s" % (
         self.StdTime(now_ms),
@@ -343,6 +354,9 @@ class ElkAccess(object):
     for s in sentence[20:28]:
       alarm_state.append(ALARM_TYPE.get(s, "unknown"))
 
+    self.sql.CreateIfNeeded()
+    self.sql.StoreZone(
+        now_ms, ZONE_UNKNOWN, COMMAND_ARM, SENSOR_UNKNOWN, sentence)
     d = {
       "area arm_status": arm_status,
       "area arm_up": arm_up,
@@ -364,6 +378,9 @@ class ElkAccess(object):
     dst = sentence[17]
     mode = sentence[18]
     disp = sentence[19]
+    self.sql.CreateIfNeeded()
+    self.sql.StoreZone(
+        now_ms, ZONE_UNKNOWN, COMMAND_XEP, SENSOR_UNKNOWN, sentence)
 
     s = "%s %s/%s/%s %s:%s:%s dow: %s dst: %s mode: %s disp: %s" % (
         self.StdTime(now_ms),
@@ -392,6 +409,10 @@ class ElkAccess(object):
       desc = ALARM_TYPE.get(z, "unknown")
       r.append("%03d: %s (%s)" % (i, desc, z))
 
+    # persist for later viewing.
+    self.sql.CreateIfNeeded()
+    self.sql.StoreZone(
+        now_ms, ZONE_UNKNOWN, COMMAND_ALARM_BY_ZONE, SENSOR_UNKNOWN, sentence)
     return "%s %s" % (
       self.StdTime(now_ms), repr(r))
       
@@ -469,6 +490,10 @@ class ElkAccess(object):
       logging.warning("unexpected sentence: %s %s %s",
          msg_len, msg_type, sentence)
       out = None
+      # Persist unexpect to sql
+      self.sql.CreateIfNeeded()
+      self.sql.StoreZone(
+          now_ms, ZONE_UNKNOWN, COMMAND_UNKNOWN, SENSOR_UNKNOWN, sentence)
 
     if out:
       print "%d: %s" % (now_ms, out)
