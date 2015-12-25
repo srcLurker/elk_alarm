@@ -273,6 +273,9 @@ class ElkAccess(object):
         self.zones_info[zone] = zone_info
         self.zones[zone] = desc
     self.sql = sql_access.SaveToSql()
+    self.armed = -1
+    self.armup = -1
+    self.alarm = ""
 
   def Connect(self):
     self.socket_connected = False
@@ -325,7 +328,8 @@ class ElkAccess(object):
     xep_release = sentence[14:16]
     self.sql.CreateIfNeeded()
     self.sql.StoreZone(
-        now_ms, ZONE_UNKNOWN, COMMAND_VERSION, SENSOR_UNKNOWN, sentence)
+        now_ms, ZONE_UNKNOWN, COMMAND_VERSION, SENSOR_UNKNOWN,
+            self.armed, self.armup, self.alarm, sentence)
 
     s = "%s m1: %s.%s.%s  xep: %s.%s.%s" % (
         self.StdTime(now_ms),
@@ -345,18 +349,33 @@ class ElkAccess(object):
     arm_status = []
     for s in sentence[4:12]:
       arm_status.append(ARM_STATE.get(int(s), "unknown"))
+    old_armed = self.armed
+    self.armed = int(sentence[4])
+
+    if old_armed != self.armed:
+      msg = "Arming state has changed for area zero: %s (%d) -> %s (%d)" % (
+          ARM_STATE.get(old_armed, "unknown"),  old_armed,
+          ARM_STATE.get(self.armed, "unknown"), self.armed)
+      logging.warning(msg)
+      if self.mailer:
+        subject = "arm state: %s" % arm_status[0]
+        self.mailer.SendEmail(self.email_to, subject, msg)
+        logging.info("email sent: <%s> <%s>", subject, msg)
 
     arm_up = []
     for s in sentence[12:20]:
       arm_up.append(AREA_STATE.get(int(s), "unknown"))
+    self.armup = int(sentence[12])
 
     alarm_state = []
     for s in sentence[20:28]:
       alarm_state.append(ALARM_TYPE.get(s, "unknown"))
+    self.alarm = int(sentence[20])
 
     self.sql.CreateIfNeeded()
     self.sql.StoreZone(
-        now_ms, ZONE_UNKNOWN, COMMAND_ARM, SENSOR_UNKNOWN, sentence)
+        now_ms, ZONE_UNKNOWN, COMMAND_ARM, SENSOR_UNKNOWN,
+            self.armed, self.armup, self.alarm, sentence)
     d = {
       "area arm_status": arm_status,
       "area arm_up": arm_up,
@@ -380,7 +399,8 @@ class ElkAccess(object):
     disp = sentence[19]
     self.sql.CreateIfNeeded()
     self.sql.StoreZone(
-        now_ms, ZONE_UNKNOWN, COMMAND_XEP, SENSOR_UNKNOWN, sentence)
+        now_ms, ZONE_UNKNOWN, COMMAND_XEP, SENSOR_UNKNOWN,
+            self.armed, self.armup, self.alarm, sentence)
 
     s = "%s %s/%s/%s %s:%s:%s dow: %s dst: %s mode: %s disp: %s" % (
         self.StdTime(now_ms),
@@ -412,7 +432,8 @@ class ElkAccess(object):
     # persist for later viewing.
     self.sql.CreateIfNeeded()
     self.sql.StoreZone(
-        now_ms, ZONE_UNKNOWN, COMMAND_ALARM_BY_ZONE, SENSOR_UNKNOWN, sentence)
+        now_ms, ZONE_UNKNOWN, COMMAND_ALARM_BY_ZONE, SENSOR_UNKNOWN,
+            self.armed, self.armup, self.alarm, sentence)
     return "%s %s" % (
       self.StdTime(now_ms), repr(r))
       
@@ -430,7 +451,8 @@ class ElkAccess(object):
 
     # Persist to sql
     self.sql.CreateIfNeeded()
-    self.sql.StoreZone(now_ms, zone, status, sensor_def, sentence)
+    self.sql.StoreZone(now_ms, zone, status, sensor_def,
+            self.armed, self.armup, self.alarm, sentence)
 
     desc = vals["description"]
     when = self.StdTime(now_ms)
@@ -493,7 +515,8 @@ class ElkAccess(object):
       # Persist unexpect to sql
       self.sql.CreateIfNeeded()
       self.sql.StoreZone(
-          now_ms, ZONE_UNKNOWN, COMMAND_UNKNOWN, SENSOR_UNKNOWN, sentence)
+          now_ms, ZONE_UNKNOWN, COMMAND_UNKNOWN, SENSOR_UNKNOWN,
+            self.armed, self.armup, self.alarm, sentence)
 
     if out:
       print "%d: %s" % (now_ms, out)

@@ -14,13 +14,16 @@ CREATE TABLE reason (
   zone INTEGER,
   status INTEGER,
   definition INTEGER,
+  armed INTEGER,
+  armup INTEGER,
+  alarm TEXT,
   actual TEXT,
   isodate TEXT
   );
 """ 
 
 INSERT_CMD = """
-INSERT INTO reason VALUES(?, ?, ?, ?, ?, ?);
+INSERT INTO reason VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?);
 """ 
 FNAME_PREFIX = "alarm"
 
@@ -49,7 +52,8 @@ class SaveToSql(object):
         con.commit()
 
 
-  def StoreZone(self, timestampms, zone, status, definition, actual):
+  def StoreZone(self, timestampms, zone, status, definition,
+      armed, armup, alarm, actual):
     l = time.gmtime(timestampms / 1000.0)
     dt = time.strftime("%Y-%m-%dT%H:%M:%S", l)
     con = sqlite3.connect(self._fname)
@@ -57,6 +61,7 @@ class SaveToSql(object):
       cur = con.cursor()
       cur.execute(INSERT_CMD,
           (int(timestampms), int(zone), int(status), int(definition),
+           int(armed), int(armup), alarm,
            actual, dt))
       con.commit()
 
