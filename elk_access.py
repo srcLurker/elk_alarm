@@ -370,7 +370,18 @@ class ElkAccess(object):
     alarm_state = []
     for s in sentence[20:28]:
       alarm_state.append(ALARM_TYPE.get(s, "unknown"))
-    self.alarm = int(sentence[20])
+    # Not an int or hex value, a character
+    self.alarm = sentence[20]
+
+    if self.alarm > ALARM_INACTIVE:
+      msg = "Alarm triggered for area zero: %s (%s)" % (
+          alarm_state[0], self.alarm)
+      logging.warning(msg)
+      if self.mailer:
+        subject = "alarm triggered: %s" % alarm_state[0]
+        self.mailer.SendEmail(self.email_to, subject, msg)
+        logging.info("email sent: <%s> <%s>", subject, msg)
+
 
     self.sql.CreateIfNeeded()
     self.sql.StoreZone(
